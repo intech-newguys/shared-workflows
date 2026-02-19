@@ -129,6 +129,15 @@ jobs:
           printf 'export AWS_SESSION_TOKEN="%s"\n' "$AWS_SESSION_TOKEN" >> /tmp/aws_creds
           printf 'export AWS_DEFAULT_REGION="%s"\n' "${{ env.AWS_REGION }}" >> /tmp/aws_creds
 
+      - name: Debug EFS mount
+        run: |
+          echo "=== /buildcache contents ==="
+          ls -la /buildcache/ 2>&1 || echo "/buildcache not accessible from runner"
+          echo "=== checking via docker ==="
+          docker run --rm -v /buildcache:/mnt alpine ls -la /mnt/ 2>&1 || echo "not accessible via docker either"
+          echo "=== df -h ==="
+          df -h | grep -E "(efs|nfs|buildcache)" || echo "no efs mount found in df"
+
       - name: Set up Docker Buildx with persistent cache
         run: |
           docker run -d --name buildkitd --privileged \
@@ -153,6 +162,12 @@ jobs:
           secret-files: |
             aws_creds=/tmp/aws_creds
           provenance: false
+
+      - name: Debug EFS after build
+        if: always()
+        run: |
+          echo "=== BuildKit cache on EFS ==="
+          docker run --rm -v /buildcache:/mnt alpine sh -c "du -sh /mnt/ 2>/dev/null; ls -la /mnt/ 2>/dev/null" || true
 
       - name: Update image tag in k8s-newguys-services
         if: env.HAS_DEPLOY_TOKEN == 'true'
