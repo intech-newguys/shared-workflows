@@ -70,7 +70,7 @@ jobs:
           echo "short-sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Slack — build started
-        uses: intech-newguys/.github/actions/slack-notify@main
+        uses: intech-newguys/shared-workflows/actions/slack-notify@main
         if: always()
         continue-on-error: true
         with:
@@ -163,7 +163,7 @@ jobs:
 
       - name: Update Jira tickets
         if: secrets.JIRA_WEBHOOKS_JSON != ''
-        uses: intech-newguys/.github/actions/jira-update@main
+        uses: intech-newguys/shared-workflows/actions/jira-update@main
         continue-on-error: true
         with:
           branch: ${{ steps.env.outputs.branch }}
@@ -171,7 +171,7 @@ jobs:
 
       - name: Slack — build result
         if: always()
-        uses: intech-newguys/.github/actions/slack-notify@main
+        uses: intech-newguys/shared-workflows/actions/slack-notify@main
         continue-on-error: true
         with:
           status: ${{ job.status }}

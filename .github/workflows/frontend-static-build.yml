@@ -186,7 +186,7 @@ jobs:
           fetch-depth: 5
 
       - name: Slack — build result
-        uses: intech-newguys/.github/actions/slack-notify@main
+        uses: intech-newguys/shared-workflows/actions/slack-notify@main
         continue-on-error: true
         with:
           status: ${{ needs.build-and-deploy.result }}
@@ -197,7 +197,7 @@ jobs:
 
       - name: Update Jira tickets
         if: secrets.JIRA_WEBHOOKS_JSON != ''
-        uses: intech-newguys/.github/actions/jira-update@main
+        uses: intech-newguys/shared-workflows/actions/jira-update@main
         continue-on-error: true
         with:
           branch: ${{ github.ref_name }}
