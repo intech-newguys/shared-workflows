@@ -131,9 +131,8 @@ jobs:
 
       - name: Set up Docker Buildx with persistent cache
         run: |
-          mkdir -p /buildcache/buildkit
           docker run -d --name buildkitd --privileged \
-            -v /buildcache/buildkit:/var/lib/buildkit \
+            -v /buildcache:/var/lib/buildkit \
             moby/buildkit:buildx-stable-1
           sleep 3
           docker buildx create --name efs-builder --driver remote \
