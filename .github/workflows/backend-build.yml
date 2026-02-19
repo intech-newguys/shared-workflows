@@ -142,7 +142,7 @@ jobs:
           tags: |
             ${{ env.ECR_REGISTRY }}/${{ steps.ecr.outputs.repo-name }}:${{ steps.env.outputs.branch }}-${{ github.run_number }}
             ${{ env.ECR_REGISTRY }}/${{ steps.ecr.outputs.repo-name }}:${{ steps.env.outputs.branch }}-latest
-          secrets: |
+          secret-files: |
             aws_creds=/tmp/aws_creds
           cache-from: type=s3,region=${{ env.AWS_REGION }},bucket=${{ inputs.s3-cache-bucket }},name=${{ steps.ecr.outputs.repo-name }}
           cache-to: type=s3,region=${{ env.AWS_REGION }},bucket=${{ inputs.s3-cache-bucket }},name=${{ steps.ecr.outputs.repo-name }},mode=max
