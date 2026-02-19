@@ -1,0 +1,142 @@
+name: Backend Build & Push
+
+on:
+  workflow_call:
+    inputs:
+      repository-name:
+        description: ECR repository name (defaults to repo name)
+        type: string
+        required: false
+        default: ''
+      dockerfile:
+        description: Path to Dockerfile
+        type: string
+        required: false
+        default: './Dockerfile'
+      build-context:
+        description: Docker build context
+        type: string
+        required: false
+        default: '.'
+      s3-cache-bucket:
+        description: S3 bucket for Docker layer cache
+        type: string
+        required: false
+        default: 'newguys-docker-cache'
+    secrets:
+      AWS_ROLE_ARN:
+        required: true
+      SLACK_TOKEN:
+        required: true
+      JIRA_WEBHOOKS_JSON:
+        required: false
+
+env:
+  AWS_REGION: eu-west-2
+  ECR_REGISTRY: 500500308151.dkr.ecr.eu-west-2.amazonaws.com
+
+jobs:
+  build:
+    runs-on: self-hosted
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Detect environment from branch
+        id: env
+        run: |
+          BRANCH="${GITHUB_REF_NAME}"
+          case "$BRANCH" in
+            dev|qa|stage|prod) ENV="$BRANCH" ;;
+            sandbox) ENV="stage" ;;
+            *) echo "Branch $BRANCH not configured for deployment"; exit 0 ;;
+          esac
+          echo "env=$ENV" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 5
+
+      - name: Get commit info
+        id: commit
+        run: |
+          echo "author=$(git log -1 --pretty=format:'%an')" >> "$GITHUB_OUTPUT"
+          echo "message=$(git log -1 --pretty=format:'%s' | head -c 100)" >> "$GITHUB_OUTPUT"
+          echo "short-sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Slack — build started
+        uses: intech-newguys/.github/actions/slack-notify@main
+        if: always()
+        continue-on-error: true
+        with:
+          status: started
+          slack-token: ${{ secrets.SLACK_TOKEN }}
+          channel: release-board-${{ steps.env.outputs.branch }}
+          repo-name: ${{ github.event.repository.name }}
+          branch: ${{ steps.env.outputs.branch }}
+          commit-author: ${{ steps.commit.outputs.author }}
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Determine ECR repo name
+        id: ecr
+        run: |
+          REPO_NAME="${{ inputs.repository-name }}"
+          if [ -z "$REPO_NAME" ]; then
+            REPO_NAME="${{ github.event.repository.name }}"
+          fi
+          echo "repo-name=$REPO_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure ECR repository exists
+        run: |
+          aws ecr describe-repositories --repository-names "${{ steps.ecr.outputs.repo-name }}" 2>/dev/null || \
+          aws ecr create-repository \
+            --repository-name "${{ steps.ecr.outputs.repo-name }}" \
+            --image-scanning-configuration scanOnPush=false \
+            --encryption-configuration encryptionType=AES256
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.build-context }}
+          file: ${{ inputs.dockerfile }}
+          push: true
+          tags: |
+            ${{ env.ECR_REGISTRY }}/${{ steps.ecr.outputs.repo-name }}:${{ steps.env.outputs.branch }}-${{ github.run_number }}
+            ${{ env.ECR_REGISTRY }}/${{ steps.ecr.outputs.repo-name }}:${{ steps.env.outputs.branch }}-latest
+          cache-from: type=s3,region=${{ env.AWS_REGION }},bucket=${{ inputs.s3-cache-bucket }},name=${{ steps.ecr.outputs.repo-name }}
+          cache-to: type=s3,region=${{ env.AWS_REGION }},bucket=${{ inputs.s3-cache-bucket }},name=${{ steps.ecr.outputs.repo-name }},mode=max
+          provenance: false
+
+      - name: Update Jira tickets
+        if: secrets.JIRA_WEBHOOKS_JSON != ''
+        uses: intech-newguys/.github/actions/jira-update@main
+        continue-on-error: true
+        with:
+          branch: ${{ steps.env.outputs.branch }}
+          jira-webhooks-json: ${{ secrets.JIRA_WEBHOOKS_JSON }}
+
+      - name: Slack — build result
+        if: always()
+        uses: intech-newguys/.github/actions/slack-notify@main
+        continue-on-error: true
+        with:
+          status: ${{ job.status }}
+          slack-token: ${{ secrets.SLACK_TOKEN }}
+          channel: release-board-${{ steps.env.outputs.branch }}
+          repo-name: ${{ github.event.repository.name }}
+          branch: ${{ steps.env.outputs.branch }}
+          commit-author: ${{ steps.commit.outputs.author }}

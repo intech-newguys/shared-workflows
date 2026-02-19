@@ -1,0 +1,22 @@
+# Example: Add this as .github/workflows/build.yml in static frontend repos
+# e.g., sport-web, admin-panel
+
+name: Build & Deploy
+
+on:
+  push:
+    branches: [dev, qa, stage, prod, sandbox]
+
+jobs:
+  build:
+    uses: intech-newguys/.github/.github/workflows/frontend-static-build.yml@main
+    with:
+      project: sport
+      partners: '["betonly.com","semabet.ug","semabet.co.tz","otbet.com","halabet.com"]'
+      build-command: npm run build
+      dist-dir: dist
+    secrets:
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+      JIRA_WEBHOOKS_JSON: ${{ secrets.JIRA_WEBHOOKS_JSON }}

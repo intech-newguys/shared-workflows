@@ -1,0 +1,20 @@
+# Example: Add this as .github/workflows/build.yml in SSR frontend repos
+# e.g., sport-betting-frontend-ssr
+
+name: Build & Deploy
+
+on:
+  push:
+    branches: [dev, qa, stage, prod, sandbox]
+
+jobs:
+  build:
+    uses: intech-newguys/.github/.github/workflows/frontend-ssr-build.yml@main
+    with:
+      repository-name: sport-betting-ssr
+      partners: '["betonly.com","semabet.ug","semabet.co.tz","otbet.com","halabet.com","betprazer.com"]'
+    secrets:
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
+      CLOUDFLARE_TOKEN: ${{ secrets.CLOUDFLARE_TOKEN }}
+      JIRA_WEBHOOKS_JSON: ${{ secrets.JIRA_WEBHOOKS_JSON }}

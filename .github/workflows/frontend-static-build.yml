@@ -1,0 +1,204 @@
+name: Frontend Static Build & Deploy (Multi-Partner)
+
+on:
+  workflow_call:
+    inputs:
+      project:
+        description: 'Project name (sport, admin, affiliate-admin, casino, iframe, agent)'
+        type: string
+        required: true
+      partners:
+        description: 'JSON array of partner domains, e.g. ["betonly.com","semabet.ug"]'
+        type: string
+        required: true
+      build-command:
+        description: Build command
+        type: string
+        required: false
+        default: 'npm run build'
+      install-command:
+        description: Install command
+        type: string
+        required: false
+        default: 'npm ci'
+      dist-dir:
+        description: Build output directory
+        type: string
+        required: false
+        default: 'dist'
+      node-version:
+        description: Node.js version
+        type: string
+        required: false
+        default: '20'
+    secrets:
+      AWS_ROLE_ARN:
+        required: true
+      SLACK_TOKEN:
+        required: true
+      SENTRY_AUTH_TOKEN:
+        required: false
+      JIRA_WEBHOOKS_JSON:
+        required: false
+
+env:
+  AWS_REGION: eu-west-2
+
+jobs:
+  build-and-deploy:
+    runs-on: self-hosted
+    permissions:
+      id-token: write
+      contents: read
+    strategy:
+      matrix:
+        domain: ${{ fromJson(inputs.partners) }}
+      fail-fast: false
+    steps:
+      - name: Detect environment from branch
+        id: env
+        run: |
+          BRANCH="${GITHUB_REF_NAME}"
+          case "$BRANCH" in
+            dev|qa|stage|prod) ENV="$BRANCH" ;;
+            sandbox) ENV="stage" ;;
+            *) echo "Branch $BRANCH not configured for deployment"; exit 0 ;;
+          esac
+          echo "env=$ENV" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 5
+
+      - name: Get commit info
+        id: commit
+        run: |
+          echo "author=$(git log -1 --pretty=format:'%an')" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Derive S3 bucket and domain prefix
+        id: s3
+        run: |
+          BRANCH="${{ steps.env.outputs.branch }}"
+          DOMAIN="${{ matrix.domain }}"
+          PROJECT="${{ inputs.project }}"
+
+          # Domain to dashes: betonly.com → betonly-com
+          DOMAIN_DASHES=$(echo "$DOMAIN" | sed 's/\./-/g')
+
+          # S3 bucket: {project}-{branch}-{domain-dashes}
+          BUCKET="${PROJECT}-${BRANCH}-${DOMAIN_DASHES}"
+
+          # Partner name for VITE env (first part of domain)
+          PARTNER_NAME=$(echo "$DOMAIN" | cut -d. -f1)
+
+          echo "bucket=$BUCKET" >> "$GITHUB_OUTPUT"
+          echo "partner-name=$PARTNER_NAME" >> "$GITHUB_OUTPUT"
+          echo "domain-dashes=$DOMAIN_DASHES" >> "$GITHUB_OUTPUT"
+
+          # Determine full hostname
+          if [ "$BRANCH" = "prod" ]; then
+            echo "hostname=$DOMAIN" >> "$GITHUB_OUTPUT"
+          else
+            echo "hostname=${BRANCH}.${DOMAIN}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install dependencies
+        run: ${{ inputs.install-command }}
+
+      - name: Copy environment config
+        run: |
+          if [ -f ".env.${{ steps.env.outputs.branch }}" ]; then
+            cp ".env.${{ steps.env.outputs.branch }}" .env
+          fi
+
+      - name: Build
+        env:
+          VITE_PARTNER_NAME: ${{ steps.s3.outputs.partner-name }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: ${{ inputs.build-command }}
+
+      - name: Sync to S3
+        run: |
+          aws s3 sync ./${{ inputs.dist-dir }} "s3://${{ steps.s3.outputs.bucket }}" \
+            --delete \
+            --cache-control "public,max-age=31536000,immutable" \
+            --exclude "index.html" \
+            --exclude "*.json"
+
+          # Upload index.html and JSON with no-cache
+          aws s3 sync ./${{ inputs.dist-dir }} "s3://${{ steps.s3.outputs.bucket }}" \
+            --cache-control "no-cache,no-store,must-revalidate" \
+            --include "index.html" \
+            --include "*.json" \
+            --exclude "*" \
+
+      - name: Invalidate CloudFront
+        continue-on-error: true
+        run: |
+          HOSTNAME="${{ steps.s3.outputs.hostname }}"
+
+          # Find CloudFront distribution by alias
+          DIST_ID=$(aws cloudfront list-distributions \
+            --query "DistributionList.Items[?contains(Aliases.Items, '${HOSTNAME}')].Id | [0]" \
+            --output text)
+
+          if [ -n "$DIST_ID" ] && [ "$DIST_ID" != "None" ]; then
+            echo "Invalidating CloudFront distribution: $DIST_ID for $HOSTNAME"
+            aws cloudfront create-invalidation \
+              --distribution-id "$DIST_ID" \
+              --paths "/*"
+          else
+            echo "No CloudFront distribution found for $HOSTNAME"
+          fi
+
+      - name: Upload security.txt
+        continue-on-error: true
+        run: |
+          mkdir -p .well-known
+          cat > .well-known/security.txt << 'SECTXT'
+          Contact: mailto:security@newguys.io
+          Preferred-Languages: en
+          SECTXT
+          aws s3 cp .well-known/security.txt "s3://${{ steps.s3.outputs.bucket }}/.well-known/security.txt" \
+            --cache-control "public,max-age=86400"
+
+  notify:
+    runs-on: self-hosted
+    needs: build-and-deploy
+    if: always()
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 5
+
+      - name: Slack — build result
+        uses: intech-newguys/.github/actions/slack-notify@main
+        continue-on-error: true
+        with:
+          status: ${{ needs.build-and-deploy.result }}
+          slack-token: ${{ secrets.SLACK_TOKEN }}
+          channel: release-board-${{ github.ref_name }}
+          repo-name: ${{ github.event.repository.name }}
+          branch: ${{ github.ref_name }}
+
+      - name: Update Jira tickets
+        if: secrets.JIRA_WEBHOOKS_JSON != ''
+        uses: intech-newguys/.github/actions/jira-update@main
+        continue-on-error: true
+        with:
+          branch: ${{ github.ref_name }}
+          jira-webhooks-json: ${{ secrets.JIRA_WEBHOOKS_JSON }}

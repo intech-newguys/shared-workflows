@@ -1,0 +1,52 @@
+name: Jira Ticket Update
+description: Extract ticket numbers from commits and update Jira via webhooks
+
+inputs:
+  branch:
+    description: Branch name (dev, qa, stage, prod)
+    required: true
+  jira-webhooks-json:
+    description: 'JSON map of project→env→{url,token} webhooks'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Extract and update Jira tickets
+      shell: bash
+      run: |
+        # Extract ticket numbers from recent commits
+        TICKETS=$(git log --format="%s %b" -5 | grep -oE '[A-Z]+-[0-9]+' | sort -u || true)
+
+        if [ -z "$TICKETS" ]; then
+          echo "No Jira tickets found in recent commits"
+          exit 0
+        fi
+
+        echo "Found tickets: $TICKETS"
+
+        BRANCH="${{ inputs.branch }}"
+        WEBHOOKS='${{ inputs.jira-webhooks-json }}'
+
+        # Group tickets by project prefix
+        for PREFIX in SP BON AF; do
+          PROJECT_TICKETS=$(echo "$TICKETS" | grep "^${PREFIX}-" | tr '\n' ',' | sed 's/,$//')
+          if [ -z "$PROJECT_TICKETS" ]; then
+            continue
+          fi
+
+          # Get webhook URL and token for this project+env
+          WEBHOOK_URL=$(echo "$WEBHOOKS" | jq -r ".${PREFIX}.${BRANCH}.url // empty")
+          WEBHOOK_TOKEN=$(echo "$WEBHOOKS" | jq -r ".${PREFIX}.${BRANCH}.token // empty")
+
+          if [ -z "$WEBHOOK_URL" ] || [ -z "$WEBHOOK_TOKEN" ]; then
+            echo "No webhook configured for ${PREFIX}/${BRANCH}"
+            continue
+          fi
+
+          echo "Updating ${PREFIX} tickets: ${PROJECT_TICKETS} for ${BRANCH}"
+          curl -s -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${WEBHOOK_TOKEN}" \
+            -d "{\"issues\": \"${PROJECT_TICKETS}\"}" || true
+        done

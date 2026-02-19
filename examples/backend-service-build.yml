@@ -1,0 +1,19 @@
+# Example: Add this as .github/workflows/build.yml in each backend service repo
+# e.g., sms-service, sport-market, sport-content, etc.
+
+name: Build & Deploy
+
+on:
+  push:
+    branches: [dev, qa, stage, prod, sandbox]
+
+jobs:
+  build:
+    uses: intech-newguys/.github/.github/workflows/backend-build.yml@main
+    with:
+      # repository-name: custom-ecr-name  # optional, defaults to repo name
+      dockerfile: ./Dockerfile
+    secrets:
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
+      JIRA_WEBHOOKS_JSON: ${{ secrets.JIRA_WEBHOOKS_JSON }}

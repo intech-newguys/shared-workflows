@@ -1,0 +1,180 @@
+name: Frontend SSR Build & Push (Multi-Partner)
+
+on:
+  workflow_call:
+    inputs:
+      repository-name:
+        description: Base ECR repository name
+        type: string
+        required: true
+      partners:
+        description: 'JSON array of partner domains, e.g. ["betonly.com","semabet.ug"]'
+        type: string
+        required: true
+      dockerfile:
+        description: Path to Dockerfile
+        type: string
+        required: false
+        default: './Dockerfile'
+      s3-cache-bucket:
+        description: S3 bucket for Docker layer cache
+        type: string
+        required: false
+        default: 'newguys-docker-cache'
+      cloudflare-purge:
+        description: Enable Cloudflare cache purge (skipped for prod)
+        type: boolean
+        required: false
+        default: true
+    secrets:
+      AWS_ROLE_ARN:
+        required: true
+      SLACK_TOKEN:
+        required: true
+      CLOUDFLARE_TOKEN:
+        required: false
+      JIRA_WEBHOOKS_JSON:
+        required: false
+
+env:
+  AWS_REGION: eu-west-2
+  ECR_REGISTRY: 500500308151.dkr.ecr.eu-west-2.amazonaws.com
+
+jobs:
+  build:
+    runs-on: self-hosted
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Detect environment from branch
+        id: env
+        run: |
+          BRANCH="${GITHUB_REF_NAME}"
+          case "$BRANCH" in
+            dev|qa|stage|prod) ENV="$BRANCH" ;;
+            sandbox) ENV="stage" ;;
+            *) echo "Branch $BRANCH not configured for deployment"; exit 0 ;;
+          esac
+          echo "env=$ENV" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 5
+
+      - name: Get commit info
+        id: commit
+        run: |
+          echo "author=$(git log -1 --pretty=format:'%an')" >> "$GITHUB_OUTPUT"
+          echo "short-sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Slack — build started
+        uses: intech-newguys/.github/actions/slack-notify@main
+        continue-on-error: true
+        with:
+          status: started
+          slack-token: ${{ secrets.SLACK_TOKEN }}
+          channel: release-board-${{ steps.env.outputs.branch }}
+          repo-name: ${{ github.event.repository.name }}
+          branch: ${{ steps.env.outputs.branch }}
+          commit-author: ${{ steps.commit.outputs.author }}
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Ensure ECR repos exist for all partners
+        run: |
+          PARTNERS='${{ inputs.partners }}'
+          for DOMAIN in $(echo "$PARTNERS" | jq -r '.[]'); do
+            # Convert domain to ECR slug: betonly.com → betonly, semabet.ug → semabet-ug
+            SLUG=$(echo "$DOMAIN" | sed 's/\.com$//' | sed 's/\./-/g')
+            REPO_NAME="${{ inputs.repository-name }}-${SLUG}"
+            aws ecr describe-repositories --repository-names "$REPO_NAME" 2>/dev/null || \
+            aws ecr create-repository --repository-name "$REPO_NAME" \
+              --image-scanning-configuration scanOnPush=false \
+              --encryption-configuration encryptionType=AES256
+            echo "ECR repo ready: $REPO_NAME"
+          done
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image (all partner tags)
+        run: |
+          BRANCH="${{ steps.env.outputs.branch }}"
+          BUILD_NUM="${{ github.run_number }}"
+          PARTNERS='${{ inputs.partners }}'
+
+          # Build tag arguments for all partners
+          TAG_ARGS=""
+          for DOMAIN in $(echo "$PARTNERS" | jq -r '.[]'); do
+            SLUG=$(echo "$DOMAIN" | sed 's/\.com$//' | sed 's/\./-/g')
+            REPO="${{ env.ECR_REGISTRY }}/${{ inputs.repository-name }}-${SLUG}"
+            TAG_ARGS="$TAG_ARGS -t ${REPO}:${BRANCH}-${BUILD_NUM} -t ${REPO}:${BRANCH}-latest"
+          done
+
+          docker buildx build \
+            --push \
+            --file ${{ inputs.dockerfile }} \
+            --cache-from=type=s3,region=${{ env.AWS_REGION }},bucket=${{ inputs.s3-cache-bucket }},name=${{ inputs.repository-name }} \
+            --cache-to=type=s3,region=${{ env.AWS_REGION }},bucket=${{ inputs.s3-cache-bucket }},name=${{ inputs.repository-name }},mode=max \
+            --provenance=false \
+            $TAG_ARGS \
+            ${{ inputs.build-context || '.' }}
+
+      - name: Purge Cloudflare cache
+        if: inputs.cloudflare-purge && steps.env.outputs.branch != 'prod' && secrets.CLOUDFLARE_TOKEN != ''
+        continue-on-error: true
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_TOKEN }}
+        run: |
+          BRANCH="${{ steps.env.outputs.branch }}"
+          PARTNERS='${{ inputs.partners }}'
+
+          for DOMAIN in $(echo "$PARTNERS" | jq -r '.[]'); do
+            # Get Cloudflare zone ID
+            BASE_DOMAIN=$(echo "$DOMAIN" | awk -F. '{print $(NF-1)"."$NF}')
+            ZONE_ID=$(curl -s -H "Authorization: Bearer ${CF_TOKEN}" \
+              "https://api.cloudflare.com/client/v4/zones?name=${BASE_DOMAIN}" \
+              | jq -r '.result[0].id // empty')
+
+            if [ -z "$ZONE_ID" ]; then
+              echo "Zone not found for $BASE_DOMAIN"
+              continue
+            fi
+
+            HOSTNAME="${BRANCH}.${DOMAIN}"
+            echo "Purging Cloudflare cache for ${HOSTNAME} (zone: ${ZONE_ID})"
+            curl -s -X POST "https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/purge_cache" \
+              -H "Authorization: Bearer ${CF_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "{\"hosts\": [\"${HOSTNAME}\"]}"
+          done
+
+      - name: Update Jira tickets
+        if: secrets.JIRA_WEBHOOKS_JSON != ''
+        uses: intech-newguys/.github/actions/jira-update@main
+        continue-on-error: true
+        with:
+          branch: ${{ steps.env.outputs.branch }}
+          jira-webhooks-json: ${{ secrets.JIRA_WEBHOOKS_JSON }}
+
+      - name: Slack — build result
+        if: always()
+        uses: intech-newguys/.github/actions/slack-notify@main
+        continue-on-error: true
+        with:
+          status: ${{ job.status }}
+          slack-token: ${{ secrets.SLACK_TOKEN }}
+          channel: release-board-${{ steps.env.outputs.branch }}
+          repo-name: ${{ github.event.repository.name }}
+          branch: ${{ steps.env.outputs.branch }}
+          commit-author: ${{ steps.commit.outputs.author }}

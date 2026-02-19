@@ -1,0 +1,31 @@
+# Example: Add this as .github/workflows/tests.yml in the QA automation repo
+
+name: Cypress E2E Tests
+
+on:
+  push:
+    branches: [stage]
+  schedule:
+    - cron: '0 5 * * *'  # Daily at 5am
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        type: choice
+        options: [dev, qa, stage, prod]
+        default: stage
+      tag-names:
+        description: Cypress tag filters
+        default: '@mobile @admin'
+
+jobs:
+  test:
+    uses: intech-newguys/.github/.github/workflows/qa-cypress.yml@main
+    with:
+      environment: ${{ inputs.environment || 'stage' }}
+      tag-names: ${{ inputs.tag-names || '@mobile @admin' }}
+      shards: 10
+    secrets:
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
+      SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}

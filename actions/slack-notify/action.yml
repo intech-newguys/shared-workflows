@@ -1,0 +1,74 @@
+name: Slack Notification
+description: Send build notification to Slack
+
+inputs:
+  status:
+    description: Build status (success, failure, started)
+    required: true
+  slack-token:
+    description: Slack API token
+    required: true
+  channel:
+    description: Slack channel (e.g., release-board-dev)
+    required: true
+  repo-name:
+    description: Repository name
+    required: true
+  branch:
+    description: Branch name
+    required: true
+  commit-author:
+    description: Commit author
+    required: false
+    default: ''
+  commit-message:
+    description: Commit message
+    required: false
+    default: ''
+  run-url:
+    description: GitHub Actions run URL
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Send Slack notification
+      shell: bash
+      env:
+        SLACK_TOKEN: ${{ inputs.slack-token }}
+      run: |
+        if [ "${{ inputs.status }}" = "success" ]; then
+          COLOR="good"
+          EMOJI=":white_check_mark:"
+          STATUS_TEXT="SUCCESS"
+        elif [ "${{ inputs.status }}" = "failure" ]; then
+          COLOR="danger"
+          EMOJI=":x:"
+          STATUS_TEXT="FAILED"
+        else
+          COLOR="warning"
+          EMOJI=":arrow_forward:"
+          STATUS_TEXT="STARTED"
+        fi
+
+        RUN_URL="${{ inputs.run-url }}"
+        if [ -z "$RUN_URL" ]; then
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+        fi
+
+        PAYLOAD=$(cat <<EOF
+        {
+          "channel": "${{ inputs.channel }}",
+          "attachments": [{
+            "color": "${COLOR}",
+            "text": "${EMOJI} *${{ inputs.repo-name }}* (\`${{ inputs.branch }}\`) — ${STATUS_TEXT}\nAuthor: ${{ inputs.commit-author }}\n<${RUN_URL}|View Build>"
+          }]
+        }
+        EOF
+        )
+
+        curl -s -X POST "https://slack.com/api/chat.postMessage" \
+          -H "Authorization: Bearer ${SLACK_TOKEN}" \
+          -H "Content-Type: application/json" \
+          -d "${PAYLOAD}"
