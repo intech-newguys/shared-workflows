@@ -122,6 +122,13 @@ jobs:
             --image-scanning-configuration scanOnPush=false \
             --encryption-configuration encryptionType=AES256
 
+      - name: Create AWS credentials secret for Docker build
+        run: |
+          echo "export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID" > /tmp/aws_creds
+          echo "export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY" >> /tmp/aws_creds
+          echo "export AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN" >> /tmp/aws_creds
+          echo "export AWS_DEFAULT_REGION=${{ env.AWS_REGION }}" >> /tmp/aws_creds
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -135,6 +142,8 @@ jobs:
           tags: |
             ${{ env.ECR_REGISTRY }}/${{ steps.ecr.outputs.repo-name }}:${{ steps.env.outputs.branch }}-${{ github.run_number }}
             ${{ env.ECR_REGISTRY }}/${{ steps.ecr.outputs.repo-name }}:${{ steps.env.outputs.branch }}-latest
+          secrets: |
+            aws_creds=/tmp/aws_creds
           cache-from: type=s3,region=${{ env.AWS_REGION }},bucket=${{ inputs.s3-cache-bucket }},name=${{ steps.ecr.outputs.repo-name }}
           cache-to: type=s3,region=${{ env.AWS_REGION }},bucket=${{ inputs.s3-cache-bucket }},name=${{ steps.ecr.outputs.repo-name }},mode=max
           provenance: false
