@@ -35,6 +35,9 @@ on:
         required: false
       JIRA_WEBHOOKS_JSON:
         required: false
+      DEPLOY_TOKEN:
+        description: GitHub token with write access to k8s-newguys-services
+        required: false
 
 env:
   AWS_REGION: eu-west-2
@@ -129,6 +132,38 @@ jobs:
             --provenance=false \
             $TAG_ARGS \
             ${{ inputs.build-context || '.' }}
+
+      - name: Update image tag in k8s-newguys-services
+        if: secrets.DEPLOY_TOKEN != ''
+        env:
+          DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+        run: |
+          BRANCH="${{ steps.env.outputs.branch }}"
+          SERVICE="${{ inputs.repository-name }}"
+          IMAGE_TAG="${BRANCH}-${{ github.run_number }}"
+          REPO="intech-newguys/k8s-newguys-services"
+
+          git clone --depth 1 "https://x-access-token:${DEPLOY_TOKEN}@github.com/${REPO}.git" _k8s-services
+          cd _k8s-services
+
+          VALUES_FILE="${BRANCH}/${SERVICE}/values.yaml"
+          if [ ! -f "$VALUES_FILE" ]; then
+            echo "No values file at ${VALUES_FILE}, skipping deploy"
+            cd .. && rm -rf _k8s-services
+            exit 0
+          fi
+
+          sed -i "s|^\(\s*tag:\).*|\1 ${IMAGE_TAG}|" "$VALUES_FILE"
+          rm -f "${BRANCH}/.argocd-source-${SERVICE}.yaml"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && echo "No changes to commit" && exit 0
+          git commit -m "deploy: ${SERVICE} ${IMAGE_TAG}"
+          git push
+
+          cd .. && rm -rf _k8s-services
 
       - name: Purge Cloudflare cache
         if: inputs.cloudflare-purge && steps.env.outputs.branch != 'prod' && secrets.CLOUDFLARE_TOKEN != ''
