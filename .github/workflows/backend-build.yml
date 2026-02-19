@@ -44,6 +44,9 @@ jobs:
     permissions:
       id-token: write
       contents: read
+    env:
+      HAS_DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN != '' }}
+      HAS_JIRA_WEBHOOKS: ${{ secrets.JIRA_WEBHOOKS_JSON != '' }}
     steps:
       - name: Detect environment from branch
         id: env
@@ -126,7 +129,7 @@ jobs:
           provenance: false
 
       - name: Update image tag in k8s-newguys-services
-        if: ${{ secrets.DEPLOY_TOKEN != '' }}
+        if: env.HAS_DEPLOY_TOKEN == 'true'
         env:
           DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
         run: |
@@ -162,7 +165,7 @@ jobs:
           cd .. && rm -rf _k8s-services
 
       - name: Update Jira tickets
-        if: ${{ secrets.JIRA_WEBHOOKS_JSON != '' }}
+        if: env.HAS_JIRA_WEBHOOKS == 'true'
         uses: intech-newguys/shared-workflows/actions/jira-update@main
         continue-on-error: true
         with:
