@@ -126,7 +126,7 @@ jobs:
           provenance: false
 
       - name: Update image tag in k8s-newguys-services
-        if: secrets.DEPLOY_TOKEN != ''
+        if: ${{ secrets.DEPLOY_TOKEN != '' }}
         env:
           DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
         run: |
@@ -162,7 +162,7 @@ jobs:
           cd .. && rm -rf _k8s-services
 
       - name: Update Jira tickets
-        if: secrets.JIRA_WEBHOOKS_JSON != ''
+        if: ${{ secrets.JIRA_WEBHOOKS_JSON != '' }}
         uses: intech-newguys/shared-workflows/actions/jira-update@main
         continue-on-error: true
         with:

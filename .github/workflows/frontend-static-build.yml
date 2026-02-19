@@ -196,7 +196,7 @@ jobs:
           branch: ${{ github.ref_name }}
 
       - name: Update Jira tickets
-        if: secrets.JIRA_WEBHOOKS_JSON != ''
+        if: ${{ secrets.JIRA_WEBHOOKS_JSON != '' }}
         uses: intech-newguys/shared-workflows/actions/jira-update@main
         continue-on-error: true
         with:
