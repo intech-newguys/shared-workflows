@@ -79,7 +79,7 @@ jobs:
         with:
           status: started
           slack-token: ${{ secrets.SLACK_TOKEN }}
-          channel: release-board-${{ steps.env.outputs.branch }}
+          channel: deployments-${{ steps.env.outputs.branch }}
           repo-name: ${{ github.event.repository.name }}
           branch: ${{ steps.env.outputs.branch }}
           commit-author: ${{ steps.commit.outputs.author }}
@@ -199,7 +199,7 @@ jobs:
         with:
           status: ${{ job.status }}
           slack-token: ${{ secrets.SLACK_TOKEN }}
-          channel: release-board-${{ steps.env.outputs.branch }}
+          channel: deployments-${{ steps.env.outputs.branch }}
           repo-name: ${{ github.event.repository.name }}
           branch: ${{ steps.env.outputs.branch }}
           commit-author: ${{ steps.commit.outputs.author }}

@@ -193,7 +193,7 @@ jobs:
         with:
           status: ${{ needs.build-and-deploy.result }}
           slack-token: ${{ secrets.SLACK_TOKEN }}
-          channel: release-board-${{ github.ref_name }}
+          channel: deployments-${{ github.ref_name }}
           repo-name: ${{ github.event.repository.name }}
           branch: ${{ github.ref_name }}
 
