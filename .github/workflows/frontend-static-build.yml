@@ -46,7 +46,7 @@ env:
 
 jobs:
   build-and-deploy:
-    runs-on: self-hosted
+    runs-on: arc-runner-set
     permissions:
       id-token: write
       contents: read
@@ -176,7 +176,7 @@ jobs:
             --cache-control "public,max-age=86400"
 
   notify:
-    runs-on: self-hosted
+    runs-on: arc-runner-set
     needs: build-and-deploy
     if: always()
     steps:
