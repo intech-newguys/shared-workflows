@@ -18,6 +18,11 @@ on:
         type: string
         required: false
         default: '.'
+      build-args:
+        description: 'Docker build args (newline-separated, e.g. "BUILD_ENV=dev")'
+        type: string
+        required: false
+        default: ''
     secrets:
       AWS_ROLE_ARN:
         required: true
@@ -176,6 +181,7 @@ jobs:
             ${{ env.ECR_REGISTRY }}/${{ steps.ecr.outputs.repo-name }}:${{ steps.env.outputs.branch }}-latest
           cache-from: type=registry,ref=${{ env.ECR_REGISTRY }}/${{ steps.ecr.outputs.repo-name }}:cache
           cache-to: type=registry,ref=${{ env.ECR_REGISTRY }}/${{ steps.ecr.outputs.repo-name }}:cache,mode=max,image-manifest=true
+          build-args: ${{ inputs.build-args }}
           secret-files: |
             aws_creds=/tmp/aws_creds
           provenance: false
