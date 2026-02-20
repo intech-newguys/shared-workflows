@@ -109,45 +109,51 @@ jobs:
           fi
           echo "repo-name=$REPO_NAME" >> "$GITHUB_OUTPUT"
 
-      - name: Ensure ECR repository exists
+      - name: Ensure ECR repository and lifecycle policy
         run: |
           REPO="${{ steps.ecr.outputs.repo-name }}"
+
+          # Create repo if it doesn't exist
           if ! aws ecr describe-repositories --repository-names "$REPO" 2>/dev/null; then
+            echo "Creating ECR repo: $REPO"
             aws ecr create-repository \
               --repository-name "$REPO" \
               --image-scanning-configuration scanOnPush=false \
               --encryption-configuration encryptionType=AES256
           fi
 
-          # Apply lifecycle policy: keep last 10 tagged images, expire untagged after 1 day
-          aws ecr put-lifecycle-policy \
-            --repository-name "$REPO" \
-            --lifecycle-policy-text '{
-              "rules": [
-                {
-                  "rulePriority": 1,
-                  "description": "Expire untagged images after 1 day",
-                  "selection": {
-                    "tagStatus": "untagged",
-                    "countType": "sinceImagePushed",
-                    "countUnit": "days",
-                    "countNumber": 1
+          # Check if lifecycle policy exists, apply if missing
+          if ! aws ecr get-lifecycle-policy --repository-name "$REPO" 2>/dev/null; then
+            echo "Applying lifecycle policy to: $REPO"
+            aws ecr put-lifecycle-policy \
+              --repository-name "$REPO" \
+              --lifecycle-policy-text '{
+                "rules": [
+                  {
+                    "rulePriority": 1,
+                    "description": "Expire untagged images after 1 day",
+                    "selection": {
+                      "tagStatus": "untagged",
+                      "countType": "sinceImagePushed",
+                      "countUnit": "days",
+                      "countNumber": 1
+                    },
+                    "action": { "type": "expire" }
                   },
-                  "action": { "type": "expire" }
-                },
-                {
-                  "rulePriority": 2,
-                  "description": "Keep last 10 images per env",
-                  "selection": {
-                    "tagStatus": "tagged",
-                    "tagPatternList": ["dev-*", "qa-*", "stage-*", "prod-*"],
-                    "countType": "imageCountMoreThan",
-                    "countNumber": 10
-                  },
-                  "action": { "type": "expire" }
-                }
-              ]
-            }'
+                  {
+                    "rulePriority": 2,
+                    "description": "Keep last 10 images per env",
+                    "selection": {
+                      "tagStatus": "tagged",
+                      "tagPatternList": ["dev-*", "qa-*", "stage-*", "prod-*"],
+                      "countType": "imageCountMoreThan",
+                      "countNumber": 10
+                    },
+                    "action": { "type": "expire" }
+                  }
+                ]
+              }'
+          fi
 
       - name: Create AWS credentials secret for Docker build
         run: |
