@@ -180,7 +180,6 @@ jobs:
             ${{ env.ECR_REGISTRY }}/${{ steps.ecr.outputs.repo-name }}:${{ steps.env.outputs.branch }}-${{ github.run_number }}
             ${{ env.ECR_REGISTRY }}/${{ steps.ecr.outputs.repo-name }}:${{ steps.env.outputs.branch }}-latest
           cache-from: type=registry,ref=${{ env.ECR_REGISTRY }}/${{ steps.ecr.outputs.repo-name }}:cache
-          cache-to: type=registry,ref=${{ env.ECR_REGISTRY }}/${{ steps.ecr.outputs.repo-name }}:cache,mode=max,image-manifest=true
           build-args: ${{ inputs.build-args }}
           secret-files: |
             aws_creds=/tmp/aws_creds
@@ -241,3 +240,18 @@ jobs:
           repo-name: ${{ github.event.repository.name }}
           branch: ${{ steps.env.outputs.branch }}
           commit-author: ${{ github.actor }}
+
+      - name: Export build cache to registry
+        if: always()
+        continue-on-error: true
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.build-context }}
+          file: ${{ inputs.dockerfile }}
+          push: false
+          cache-from: type=registry,ref=${{ env.ECR_REGISTRY }}/${{ steps.ecr.outputs.repo-name }}:cache
+          cache-to: type=registry,ref=${{ env.ECR_REGISTRY }}/${{ steps.ecr.outputs.repo-name }}:cache,mode=max,image-manifest=true
+          build-args: ${{ inputs.build-args }}
+          secret-files: |
+            aws_creds=/tmp/aws_creds
+          provenance: false

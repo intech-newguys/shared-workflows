@@ -152,6 +152,15 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Determine cache repo
+        id: cache
+        run: |
+          PARTNERS='${{ inputs.partners }}'
+          FIRST_DOMAIN=$(echo "$PARTNERS" | jq -r '.[0]')
+          FIRST_SLUG=$(echo "$FIRST_DOMAIN" | sed 's/\.com$//' | sed 's/\./-/g')
+          CACHE_REPO="${{ env.ECR_REGISTRY }}/${{ inputs.repository-name }}-${FIRST_SLUG}"
+          echo "repo=${CACHE_REPO}" >> "$GITHUB_OUTPUT"
+
       - name: Build and push Docker image (all partner tags)
         run: |
           BRANCH="${{ steps.env.outputs.branch }}"
@@ -161,24 +170,16 @@ jobs:
 
           # Build tag arguments for all partners
           TAG_ARGS=""
-          FIRST_SLUG=""
           for DOMAIN in $(echo "$PARTNERS" | jq -r '.[]'); do
             SLUG=$(echo "$DOMAIN" | sed 's/\.com$//' | sed 's/\./-/g')
             REPO="${{ env.ECR_REGISTRY }}/${BASE_REPO}-${SLUG}"
             TAG_ARGS="$TAG_ARGS -t ${REPO}:${BRANCH}-${BUILD_NUM} -t ${REPO}:${BRANCH}-latest"
-            if [ -z "$FIRST_SLUG" ]; then
-              FIRST_SLUG="$SLUG"
-            fi
           done
-
-          # Use first partner repo for cache
-          CACHE_REPO="${{ env.ECR_REGISTRY }}/${BASE_REPO}-${FIRST_SLUG}"
 
           docker buildx build \
             --push \
             --file ${{ inputs.dockerfile }} \
-            --cache-from=type=registry,ref=${CACHE_REPO}:cache \
-            --cache-to=type=registry,ref=${CACHE_REPO}:cache,mode=max,image-manifest=true \
+            --cache-from=type=registry,ref=${{ steps.cache.outputs.repo }}:cache \
             --provenance=false \
             $TAG_ARGS \
             ${{ inputs.build-context }}
@@ -262,3 +263,15 @@ jobs:
           repo-name: ${{ github.event.repository.name }}
           branch: ${{ steps.env.outputs.branch }}
           commit-author: ${{ github.actor }}
+
+      - name: Export build cache to registry
+        if: always()
+        continue-on-error: true
+        run: |
+          docker buildx build \
+            --file ${{ inputs.dockerfile }} \
+            --cache-from=type=registry,ref=${{ steps.cache.outputs.repo }}:cache \
+            --cache-to=type=registry,ref=${{ steps.cache.outputs.repo }}:cache,mode=max,image-manifest=true \
+            --provenance=false \
+            --output=type=cacheonly \
+            ${{ inputs.build-context }}
