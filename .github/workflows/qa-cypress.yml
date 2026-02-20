@@ -47,6 +47,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Install AWS CLI
+        run: |
+          if ! command -v aws &>/dev/null; then
+            curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+            unzip -q /tmp/awscliv2.zip -d /tmp
+            /tmp/aws/install --install-dir "$HOME/.local/aws-cli" --bin-dir "$HOME/.local/bin"
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+            rm -rf /tmp/awscliv2.zip /tmp/aws
+          fi
+          ${HOME}/.local/bin/aws --version || aws --version
+
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -62,6 +73,9 @@ jobs:
           aws ecr create-repository --repository-name cypress-test \
             --image-scanning-configuration scanOnPush=false
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build and push test image
         id: build
         run: |
@@ -71,6 +85,8 @@ jobs:
           docker buildx build \
             --push \
             --file ${{ inputs.dockerfile }} \
+            --cache-from=type=registry,ref=${{ env.ECR_REGISTRY }}/cypress-test:cache \
+            --cache-to=type=registry,ref=${{ env.ECR_REGISTRY }}/cypress-test:cache,mode=max,image-manifest=true \
             --provenance=false \
             -t "$FULL_IMAGE" .
 
@@ -81,7 +97,7 @@ jobs:
     needs: build-test-image
     strategy:
       matrix:
-        shard: ${{ fromJson(format('[{0}]', join(fromJson(format('[{0}]', '1,2,3,4,5,6,7,8,9,10')), ','))) }}
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
       fail-fast: false
     steps:
       - name: Configure AWS credentials (OIDC)
@@ -126,11 +142,6 @@ jobs:
     needs: [build-test-image, run-tests]
     if: always()
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 5
-
       - name: Slack — test results
         uses: intech-newguys/shared-workflows/actions/slack-notify@main
         continue-on-error: true
@@ -140,3 +151,4 @@ jobs:
           channel: qa-automation
           repo-name: ${{ github.event.repository.name }}
           branch: ${{ github.ref_name }}
+          commit-author: ${{ github.actor }}

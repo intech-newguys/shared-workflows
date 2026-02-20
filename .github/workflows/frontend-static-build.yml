@@ -52,6 +52,7 @@ jobs:
       contents: read
     env:
       HAS_JIRA_WEBHOOKS: ${{ secrets.JIRA_WEBHOOKS_JSON != '' }}
+      HAS_SENTRY_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN != '' }}
     strategy:
       matrix:
         domain: ${{ fromJson(inputs.partners) }}
@@ -74,15 +75,21 @@ jobs:
         with:
           fetch-depth: 5
 
-      - name: Get commit info
-        id: commit
-        run: |
-          echo "author=$(git log -1 --pretty=format:'%an')" >> "$GITHUB_OUTPUT"
-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node-version }}
+
+      - name: Install AWS CLI
+        run: |
+          if ! command -v aws &>/dev/null; then
+            curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+            unzip -q /tmp/awscliv2.zip -d /tmp
+            /tmp/aws/install --install-dir "$HOME/.local/aws-cli" --bin-dir "$HOME/.local/bin"
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+            rm -rf /tmp/awscliv2.zip /tmp/aws
+          fi
+          ${HOME}/.local/bin/aws --version || aws --version
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
@@ -125,11 +132,16 @@ jobs:
           if [ -f ".env.${{ steps.env.outputs.branch }}" ]; then
             cp ".env.${{ steps.env.outputs.branch }}" .env
           fi
+          # Append Sentry token if available
+          if [ "${{ env.HAS_SENTRY_TOKEN }}" = "true" ]; then
+            echo "SENTRY_AUTH_TOKEN=${{ secrets.SENTRY_AUTH_TOKEN }}" >> .env
+          fi
 
       - name: Build
         env:
           VITE_PARTNER_NAME: ${{ steps.s3.outputs.partner-name }}
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          NODE_OPTIONS: "--max-old-space-size=3072"
         run: ${{ inputs.build-command }}
 
       - name: Sync to S3
@@ -145,14 +157,13 @@ jobs:
             --cache-control "no-cache,no-store,must-revalidate" \
             --include "index.html" \
             --include "*.json" \
-            --exclude "*" \
+            --exclude "*"
 
       - name: Invalidate CloudFront
         continue-on-error: true
         run: |
           HOSTNAME="${{ steps.s3.outputs.hostname }}"
 
-          # Find CloudFront distribution by alias
           DIST_ID=$(aws cloudfront list-distributions \
             --query "DistributionList.Items[?contains(Aliases.Items, '${HOSTNAME}')].Id | [0]" \
             --output text)
@@ -182,20 +193,16 @@ jobs:
     needs: build-and-deploy
     if: always()
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 5
-
       - name: Slack — build result
         uses: intech-newguys/shared-workflows/actions/slack-notify@main
         continue-on-error: true
         with:
           status: ${{ needs.build-and-deploy.result }}
           slack-token: ${{ secrets.SLACK_TOKEN }}
-          channel: deployments-${{ github.ref_name }}
+          channel: front-deployments-${{ github.ref_name }}
           repo-name: ${{ github.event.repository.name }}
           branch: ${{ github.ref_name }}
+          commit-author: ${{ github.actor }}
 
       - name: Update Jira tickets
         if: env.HAS_JIRA_WEBHOOKS == 'true'
