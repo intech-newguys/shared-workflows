@@ -63,7 +63,6 @@ jobs:
       - name: Get commit info
         id: commit
         run: |
-          echo "author=$(git log -1 --pretty=format:'%an')" >> "$GITHUB_OUTPUT"
           echo "message=$(git log -1 --pretty=format:'%s' | head -c 100)" >> "$GITHUB_OUTPUT"
           echo "short-sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
@@ -77,7 +76,7 @@ jobs:
           channel: deployments-${{ steps.env.outputs.branch }}
           repo-name: ${{ github.event.repository.name }}
           branch: ${{ steps.env.outputs.branch }}
-          commit-author: ${{ steps.commit.outputs.author }}
+          commit-author: ${{ github.actor }}
 
       - name: Install AWS CLI
         run: |
@@ -235,4 +234,4 @@ jobs:
           channel: deployments-${{ steps.env.outputs.branch }}
           repo-name: ${{ github.event.repository.name }}
           branch: ${{ steps.env.outputs.branch }}
-          commit-author: ${{ steps.commit.outputs.author }}
+          commit-author: ${{ github.actor }}
